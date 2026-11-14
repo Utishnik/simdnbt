@@ -1,4 +1,6 @@
-use std::{mem, simd::prelude::*};
+use std::mem;
+
+use wide::{u8x16, u16x8, u32x4, u64x2};
 
 // TODO: relying on auto-vectorization for swapping bits is significantly faster
 // than this code, we should figure out a way to make that work dynamically and
@@ -19,244 +21,67 @@ mod private {
 pub trait SwappableNumber: private::Sealed {}
 impl<T: private::Sealed> SwappableNumber for T {}
 
+/// Swap the bytes of every 16-bit value in the given slice.
+///
+/// The values are swapped a whole vector at a time, with the leftover values at
+/// the end of the slice being swapped one at a time.
 #[inline]
-fn swap_endianness_16bit(bytes: &mut [u8], num: usize) {
-    for i in 0..num / 32 {
-        let simd: u8x64 = Simd::from_slice(bytes[i * 32 * 2..(i + 1) * 32 * 2].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            1, 0,
-            3, 2,
-            5, 4,
-            7, 6,
-            9, 8,
-            11, 10,
-            13, 12,
-            15, 14,
-            17, 16,
-            19, 18,
-            21, 20,
-            23, 22,
-            25, 24,
-            27, 26,
-            29, 28,
-            31, 30,
-            33, 32,
-            35, 34,
-            37, 36,
-            39, 38,
-            41, 40,
-            43, 42,
-            45, 44,
-            47, 46,
-            49, 48,
-            51, 50,
-            53, 52,
-            55, 54,
-            57, 56,
-            59, 58,
-            61, 60,
-            63, 62,
-        ]);
-        bytes[i * 32 * 2..(i + 1) * 32 * 2].copy_from_slice(simd.as_array());
+fn swap_endianness_16bit(bytes: &mut [u8]) {
+    let (chunks, remainder) = bytes.as_chunks_mut::<16>();
+    for chunk in chunks {
+        let values: u16x8 = bytemuck::cast(u8x16::new(*chunk));
+        // swap the two bytes of every value
+        let swapped: u16x8 = (values << 8u32) | (values >> 8u32);
+        let swapped: u8x16 = bytemuck::cast(swapped);
+        chunk.copy_from_slice(&swapped.to_array());
     }
 
-    let mut i = num / 32 * 32;
-    if i + 16 <= num {
-        let simd: u8x32 = Simd::from_slice(bytes[i * 2..i * 2 + 32].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            1, 0,
-            3, 2,
-            5, 4,
-            7, 6,
-            9, 8,
-            11, 10,
-            13, 12,
-            15, 14,
-            17, 16,
-            19, 18,
-            21, 20,
-            23, 22,
-            25, 24,
-            27, 26,
-            29, 28,
-            31, 30,
-        ]);
-        bytes[i * 2..i * 2 + 32].copy_from_slice(simd.as_array());
-        i += 16;
-    }
-    if i + 8 <= num {
-        let simd: u8x16 = Simd::from_slice(bytes[i * 2..i * 2 + 16].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            1, 0,
-            3, 2,
-            5, 4,
-            7, 6,
-            9, 8,
-            11, 10,
-            13, 12,
-            15, 14,
-        ]);
-        bytes[i * 2..i * 2 + 16].copy_from_slice(simd.as_array());
-        i += 8;
-    }
-    if i + 4 <= num {
-        let simd: u8x8 = Simd::from_slice(bytes[i * 2..i * 2 + 8].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            1, 0,
-            3, 2,
-            5, 4,
-            7, 6,
-        ]);
-        bytes[i * 2..i * 2 + 8].copy_from_slice(simd.as_array());
-        i += 4;
-    }
-    if i + 2 <= num {
-        let simd: u8x4 = Simd::from_slice(bytes[i * 2..i * 2 + 4].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            1, 0,
-            3, 2,
-        ]);
-        bytes[i * 2..i * 2 + 4].copy_from_slice(simd.as_array());
-        i += 2;
-    }
-    if i < num {
-        let simd: u8x2 = Simd::from_slice(bytes[i * 2..i * 2 + 2].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            1, 0,
-        ]);
-        bytes[i * 2..i * 2 + 2].copy_from_slice(simd.as_array());
+    for value in remainder.as_chunks_mut::<2>().0 {
+        value.reverse();
     }
 }
 
+/// Swap the bytes of every 32-bit value in the given slice.
 #[inline]
-fn swap_endianness_32bit(bytes: &mut [u8], num: usize) {
-    for i in 0..num / 16 {
-        let simd: u8x64 = Simd::from_slice(bytes[i * 16 * 4..(i + 1) * 16 * 4].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            3, 2, 1, 0,
-            7, 6, 5, 4,
-            11, 10, 9, 8,
-            15, 14, 13, 12,
-            19, 18, 17, 16,
-            23, 22, 21, 20,
-            27, 26, 25, 24,
-            31, 30, 29, 28,
-            35, 34, 33, 32,
-            39, 38, 37, 36,
-            43, 42, 41, 40,
-            47, 46, 45, 44,
-            51, 50, 49, 48,
-            55, 54, 53, 52,
-            59, 58, 57, 56,
-            63, 62, 61, 60,
-        ]);
-        bytes[i * 16 * 4..(i + 1) * 16 * 4].copy_from_slice(simd.as_array());
+fn swap_endianness_32bit(bytes: &mut [u8]) {
+    let (chunks, remainder) = bytes.as_chunks_mut::<16>();
+    for chunk in chunks {
+        let values: u32x4 = bytemuck::cast(u8x16::new(*chunk));
+        // reverse the four bytes of every value
+        let swapped: u32x4 = ((values << 24u32) & 0xff00_0000)
+            | ((values << 8u32) & 0x00ff_0000)
+            | ((values >> 8u32) & 0x0000_ff00)
+            | ((values >> 24u32) & 0x0000_00ff);
+        let swapped: u8x16 = bytemuck::cast(swapped);
+        chunk.copy_from_slice(&swapped.to_array());
     }
 
-    let mut i = num / 16 * 16;
-    if i + 8 <= num {
-        let simd: u8x32 = Simd::from_slice(bytes[i * 4..i * 4 + 32].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            3, 2, 1, 0,
-            7, 6, 5, 4,
-            11, 10, 9, 8,
-            15, 14, 13, 12,
-            19, 18, 17, 16,
-            23, 22, 21, 20,
-            27, 26, 25, 24,
-            31, 30, 29, 28,
-        ]);
-        bytes[i * 4..i * 4 + 32].copy_from_slice(simd.as_array());
-        i += 8;
-    }
-    if i + 4 <= num {
-        let simd: u8x16 = Simd::from_slice(bytes[i * 4..i * 4 + 16].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            3, 2, 1, 0,
-            7, 6, 5, 4,
-            11, 10, 9, 8,
-            15, 14, 13, 12,
-        ]);
-        bytes[i * 4..i * 4 + 16].copy_from_slice(simd.as_array());
-        i += 4;
-    }
-    if i + 2 <= num {
-        let simd: u8x8 = Simd::from_slice(bytes[i * 4..i * 4 + 8].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            3, 2, 1, 0,
-            7, 6, 5, 4,
-        ]);
-        bytes[i * 4..i * 4 + 8].copy_from_slice(simd.as_array());
-        i += 2;
-    }
-    if i < num {
-        let simd: u8x4 = Simd::from_slice(bytes[i * 4..i * 4 + 4].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            3, 2, 1, 0,
-        ]);
-        bytes[i * 4..i * 4 + 4].copy_from_slice(simd.as_array());
+    for value in remainder.as_chunks_mut::<4>().0 {
+        value.reverse();
     }
 }
 
+/// Swap the bytes of every 64-bit value in the given slice.
 #[inline]
-fn swap_endianness_64bit(bytes: &mut [u8], num: usize) {
-    for i in 0..num / 8 {
-        let simd: u8x64 = Simd::from_slice(bytes[i * 64..i * 64 + 64].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            7, 6, 5, 4, 3, 2, 1, 0,
-            15, 14, 13, 12, 11, 10, 9, 8,
-            23, 22, 21, 20, 19, 18, 17, 16,
-            31, 30, 29, 28, 27, 26, 25, 24,
-            39, 38, 37, 36, 35, 34, 33, 32,
-            47, 46, 45, 44, 43, 42, 41, 40,
-            55, 54, 53, 52, 51, 50, 49, 48,
-            63, 62, 61, 60, 59, 58, 57, 56,
-        ]);
-        bytes[i * 64..i * 64 + 64].copy_from_slice(simd.as_array());
+fn swap_endianness_64bit(bytes: &mut [u8]) {
+    let (chunks, remainder) = bytes.as_chunks_mut::<16>();
+    for chunk in chunks {
+        let values: u64x2 = bytemuck::cast(u8x16::new(*chunk));
+        // reverse the eight bytes of every value
+        let swapped: u64x2 = ((values << 56u32) & 0xff00_0000_0000_0000)
+            | ((values << 40u32) & 0x00ff_0000_0000_0000)
+            | ((values << 24u32) & 0x0000_ff00_0000_0000)
+            | ((values << 8u32) & 0x0000_00ff_0000_0000)
+            | ((values >> 8u32) & 0x0000_0000_ff00_0000)
+            | ((values >> 24u32) & 0x0000_0000_00ff_0000)
+            | ((values >> 40u32) & 0x0000_0000_0000_ff00)
+            | ((values >> 56u32) & 0x0000_0000_0000_00ff);
+        let swapped: u8x16 = bytemuck::cast(swapped);
+        chunk.copy_from_slice(&swapped.to_array());
     }
 
-    let mut i = num / 8 * 8;
-    if i + 4 <= num {
-        let simd: u8x32 = Simd::from_slice(bytes[i * 8..i * 8 + 32].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            7, 6, 5, 4, 3, 2, 1, 0,
-            15, 14, 13, 12, 11, 10, 9, 8,
-            23, 22, 21, 20, 19, 18, 17, 16,
-            31, 30, 29, 28, 27, 26, 25, 24,
-        ]);
-        bytes[i * 8..i * 8 + 32].copy_from_slice(simd.as_array());
-        i += 4;
-    }
-    if i + 2 <= num {
-        let simd: u8x16 = Simd::from_slice(bytes[i * 8..i * 8 + 16].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            7, 6, 5, 4, 3, 2, 1, 0,
-            15, 14, 13, 12, 11, 10, 9, 8,
-        ]);
-        bytes[i * 8..i * 8 + 16].copy_from_slice(simd.as_array());
-        i += 2;
-    }
-    if i < num {
-        let simd: u8x8 = Simd::from_slice(bytes[i * 8..i * 8 + 8].as_ref());
-        #[rustfmt::skip]
-        let simd = simd_swizzle!(simd, [
-            7, 6, 5, 4, 3, 2, 1, 0,
-        ]);
-        bytes[i * 8..i * 8 + 8].copy_from_slice(simd.as_array());
+    for value in remainder.as_chunks_mut::<8>().0 {
+        value.reverse();
     }
 }
 
@@ -264,13 +89,12 @@ fn swap_endianness_64bit(bytes: &mut [u8], num: usize) {
 /// in-place depending on the width of the given type.
 fn swap_endianness_from_type<T: SwappableNumber>(items: &mut [u8]) {
     let item_width = mem::size_of::<T>();
-    let length = items.len() / item_width;
 
     if cfg!(target_endian = "little") {
         match item_width {
-            2 => swap_endianness_16bit(items, length),
-            4 => swap_endianness_32bit(items, length),
-            8 => swap_endianness_64bit(items, length),
+            2 => swap_endianness_16bit(items),
+            4 => swap_endianness_32bit(items),
+            8 => swap_endianness_64bit(items),
             _ => panic!("unsupported size of type"),
         }
     }
@@ -351,6 +175,37 @@ mod tests {
                 u64::from_le_bytes([8, 7, 6, 5, 4, 3, 2, 1]),
                 u64::from_le_bytes([1, 2, 3, 4, 5, 6, 7, 8])
             ]
-        );
+        )
+    }
+
+    #[test]
+    fn test_swap_endianness_long() {
+        // longer than a single vector, so it uses both the vector and the
+        // leftover code paths
+        let data: Vec<u8> = (0..37).collect();
+
+        let swapped = swap_endianness_as_u8::<u16>(&data);
+        for (i, value) in swapped.as_chunks::<2>().0.iter().enumerate() {
+            assert_eq!(value, &[data[i * 2 + 1], data[i * 2]]);
+        }
+
+        let swapped = swap_endianness_as_u8::<u32>(&data);
+        for (i, value) in swapped.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(
+                value,
+                &[
+                    data[i * 4 + 3],
+                    data[i * 4 + 2],
+                    data[i * 4 + 1],
+                    data[i * 4],
+                ]
+            );
+        }
+
+        let swapped = swap_endianness_as_u8::<u64>(&data);
+        for (i, value) in swapped.as_chunks::<8>().0.iter().enumerate() {
+            let expected: Vec<u8> = (0..8).rev().map(|j| data[i * 8 + j]).collect();
+            assert_eq!(value, &expected[..]);
+        }
     }
 }
